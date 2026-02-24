@@ -22,12 +22,15 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-semibold">Login</h1>
+        <p className="text-sm text-gray-600">We’ll email you a one-time login link.</p>
+
         <input
           className="w-full border rounded px-3 py-2"
           placeholder="you@example.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
+
         <button
           className="w-full bg-black text-white rounded px-3 py-2 disabled:opacity-50"
           onClick={sendLink}
@@ -35,6 +38,7 @@ export default function LoginPage() {
         >
           {sent ? "Link sent" : "Send login link"}
         </button>
+
         {error && <p className="text-sm text-red-600">{error}</p>}
       </div>
     </div>
