@@ -49,6 +49,7 @@ export default function DraftRoomPage() {
   const [picks, setPicks] = useState<PickRow[]>([]);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [search, setSearch] = useState("");
+  const [showReturning, setShowReturning] = useState(false);
   const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -59,12 +60,19 @@ export default function DraftRoomPage() {
     return m;
   }, [picks]);
 
+  const currentSlot = useMemo(() => {
+    if (!draft) return null;
+    return slots.find((s) => s.pick_index === draft.current_pick_index) ?? null;
+  }, [draft, slots]);
+
   async function loadDraftAndBoard(validDraftId: string) {
     setError(null);
 
     const { data: d, error: dErr } = await supabase
       .from("drafts")
-      .select("id,name,status,grade,program,current_pick_index,current_skill_rank,base_roster_limit")
+      .select(
+        "id,name,status,grade,program,current_pick_index,current_skill_rank,base_roster_limit"
+      )
       .eq("id", validDraftId)
       .single();
 
@@ -113,10 +121,21 @@ export default function DraftRoomPage() {
     // Server-side filter from the view (undrafted only)
     let query = supabase
       .from("available_players")
-      .select("id,first_name,last_name,skill_rank,is_returning,returning_team_id,returning_team_name")
+      .select(
+        "id,first_name,last_name,skill_rank,is_returning,returning_team_id,returning_team_name"
+      )
       .eq("draft_id", validDraftId)
       .eq("grade", draft.grade)
-      .eq("program", draft.program)
+      .eq("program", draft.program);
+
+    // Toggle: show only free agents unless showReturning is enabled
+    if (!showReturning) {
+      query = query.eq("is_returning", false);
+    }
+
+    // Ordering (free agents first when returning is shown)
+    query = query
+      .order("is_returning", { ascending: true })
       .order("skill_rank", { ascending: true })
       .order("last_name", { ascending: true })
       .limit(200);
@@ -124,7 +143,9 @@ export default function DraftRoomPage() {
     const trimmed = q.trim();
     if (trimmed) {
       // Search first OR last name
-      query = query.or(`first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`);
+      query = query.or(
+        `first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`
+      );
     }
 
     const { data, error } = await query;
@@ -149,7 +170,7 @@ export default function DraftRoomPage() {
       return;
     }
 
-    // Board will update via realtime, but we also refresh available players quickly
+    // Board updates via realtime, but refresh available players right away
     await loadDraftAndBoard(draftId);
     await loadAvailablePlayers(draftId, search);
   }
@@ -190,13 +211,13 @@ export default function DraftRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId, draft?.grade, draft?.program]);
 
-  // Debounced search
+  // Debounced search + toggle
   useEffect(() => {
     if (!draftId || !draft) return;
     const t = setTimeout(() => loadAvailablePlayers(draftId, search), 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, showReturning]);
 
   if (!draftId) return <p className="p-6">Loading draft…</p>;
 
@@ -204,12 +225,14 @@ export default function DraftRoomPage() {
     <div className="p-6 space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">{draft?.name ?? "Draft Room"}</h1>
-        {draft && (
+
+        {draft && currentSlot && (
           <p className="text-sm text-gray-600 dark:text-gray-300">
-            Status: {draft.status} • Division: Grade {draft.grade} {draft.program} • Open Skill Rank:{" "}
-            {draft.current_skill_rank} • Current Pick: {draft.current_pick_index}
+            On the clock: <b>{currentSlot.team_name}</b> • Slot: <b>{currentSlot.slot_type}</b> • Pick{" "}
+            <b>{draft.current_pick_index}</b> • Open Skill Rank: <b>{draft.current_skill_rank}</b>
           </p>
         )}
+
         {error && <p className="text-red-600 mt-2">{error}</p>}
       </div>
 
@@ -228,6 +251,7 @@ export default function DraftRoomPage() {
             {slots.map((s) => {
               const pick = picksByIndex.get(s.pick_index);
               const isCurrent = draft?.current_pick_index === s.pick_index;
+
               return (
                 <div
                   key={s.pick_index}
@@ -248,17 +272,30 @@ export default function DraftRoomPage() {
 
         {/* Available Players */}
         <div className="border rounded p-3 space-y-3">
-          <div className="space-y-1">
+          <div className="space-y-2">
             <div className="font-medium text-gray-900 dark:text-gray-100">Available Players</div>
+
             <input
               className="w-full border rounded px-3 py-2 bg-white dark:bg-black/20 text-gray-900 dark:text-gray-100"
               placeholder="Search first or last name…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
+
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={showReturning}
+                onChange={(e) => setShowReturning(e.target.checked)}
+              />
+              Show returning players
+            </label>
+
             <div className="text-xs text-gray-600 dark:text-gray-300">
               Showing up to 200 undrafted players for this division
             </div>
+
             {playerError && <p className="text-sm text-red-600">{playerError}</p>}
           </div>
 
@@ -276,6 +313,7 @@ export default function DraftRoomPage() {
                       : " • Free Agent"}
                   </div>
                 </div>
+
                 <button
                   className="shrink-0 bg-black text-white rounded px-3 py-2 disabled:opacity-50"
                   onClick={() => draftPlayer(p.id)}
@@ -285,8 +323,11 @@ export default function DraftRoomPage() {
                 </button>
               </div>
             ))}
+
             {players.length === 0 && (
-              <div className="p-3 text-sm text-gray-600 dark:text-gray-300">No available players found.</div>
+              <div className="p-3 text-sm text-gray-600 dark:text-gray-300">
+                No available players found.
+              </div>
             )}
           </div>
         </div>
