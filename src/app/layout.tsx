@@ -23,8 +23,8 @@ export const metadata = {
     title: "FFL Draft"
   },
   icons: {
-    apple: "/apple-touch-icon.png"
-  }
+    apple: "/apple-touch-icon.png",
+    icon: "/icons/icon-192.png",  },
 };
 
 export default function RootLayout({
