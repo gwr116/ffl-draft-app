@@ -51,6 +51,7 @@ export default function DraftRoomPage() {
   const [search, setSearch] = useState("");
   const [showReturning, setShowReturning] = useState(false);
   const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
 
@@ -118,7 +119,6 @@ export default function DraftRoomPage() {
     if (!draft) return;
     setPlayerError(null);
 
-    // Server-side filter from the view (undrafted only)
     let query = supabase
       .from("available_players")
       .select(
@@ -128,12 +128,10 @@ export default function DraftRoomPage() {
       .eq("grade", draft.grade)
       .eq("program", draft.program);
 
-    // Toggle: show only free agents unless showReturning is enabled
     if (!showReturning) {
       query = query.eq("is_returning", false);
     }
 
-    // Ordering (free agents first when returning is shown)
     query = query
       .order("is_returning", { ascending: true })
       .order("skill_rank", { ascending: true })
@@ -142,7 +140,6 @@ export default function DraftRoomPage() {
 
     const trimmed = q.trim();
     if (trimmed) {
-      // Search first OR last name
       query = query.or(
         `first_name.ilike.%${trimmed}%,last_name.ilike.%${trimmed}%`
       );
@@ -170,7 +167,30 @@ export default function DraftRoomPage() {
       return;
     }
 
-    // Board updates via realtime, but refresh available players right away
+    await loadDraftAndBoard(draftId);
+    await loadAvailablePlayers(draftId, search);
+  }
+
+  async function resetDraft() {
+    if (!draftId) return;
+
+    const ok = window.confirm(
+      "Reset this draft? This will delete ALL picks and reset the current pick to 1."
+    );
+    if (!ok) return;
+
+    setPlayerError(null);
+    setResetBusy(true);
+
+    const { error } = await supabase.rpc("reset_draft", { p_draft_id: draftId });
+
+    setResetBusy(false);
+
+    if (error) {
+      setPlayerError(error.message);
+      return;
+    }
+
     await loadDraftAndBoard(draftId);
     await loadAvailablePlayers(draftId, search);
   }
@@ -178,7 +198,6 @@ export default function DraftRoomPage() {
   useEffect(() => {
     if (!draftId) return;
 
-    // initial load
     loadDraftAndBoard(draftId);
 
     const channel = supabase
@@ -204,14 +223,12 @@ export default function DraftRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId]);
 
-  // When draft loads/changes, load players
   useEffect(() => {
     if (!draftId || !draft) return;
     loadAvailablePlayers(draftId, search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId, draft?.grade, draft?.program]);
 
-  // Debounced search + toggle
   useEffect(() => {
     if (!draftId || !draft) return;
     const t = setTimeout(() => loadAvailablePlayers(draftId, search), 250);
@@ -233,11 +250,22 @@ export default function DraftRoomPage() {
           </p>
         )}
 
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <button
+            className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
+            onClick={resetDraft}
+            disabled={resetBusy}
+            title="Testing only"
+          >
+            {resetBusy ? "Resetting…" : "Reset Draft (testing)"}
+          </button>
+        </div>
+
         {error && <p className="text-red-600 mt-2">{error}</p>}
+        {playerError && <p className="text-red-600 mt-2">{playerError}</p>}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Draft Board */}
         <div className="lg:col-span-2 border rounded">
           <div className="grid grid-cols-5 gap-2 p-3 text-sm font-medium border-b text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
             <div>Pick</div>
@@ -270,7 +298,6 @@ export default function DraftRoomPage() {
           </div>
         </div>
 
-        {/* Available Players */}
         <div className="border rounded p-3 space-y-3">
           <div className="space-y-2">
             <div className="font-medium text-gray-900 dark:text-gray-100">Available Players</div>
@@ -295,8 +322,6 @@ export default function DraftRoomPage() {
             <div className="text-xs text-gray-600 dark:text-gray-300">
               Showing up to 200 undrafted players for this division
             </div>
-
-            {playerError && <p className="text-sm text-red-600">{playerError}</p>}
           </div>
 
           <div className="max-h-[60vh] overflow-auto divide-y border rounded">
