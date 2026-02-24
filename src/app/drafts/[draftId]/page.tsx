@@ -36,6 +36,7 @@ type PlayerRow = {
   skill_rank: number;
   is_returning: boolean;
   returning_team_id: string | null;
+  returning_team_name: string | null;
 };
 
 export default function DraftRoomPage() {
@@ -112,7 +113,7 @@ export default function DraftRoomPage() {
     // Server-side filter from the view (undrafted only)
     let query = supabase
       .from("available_players")
-      .select("id,first_name,last_name,skill_rank,is_returning,returning_team_id")
+      .select("id,first_name,last_name,skill_rank,is_returning,returning_team_id,returning_team_name")
       .eq("draft_id", validDraftId)
       .eq("grade", draft.grade)
       .eq("program", draft.program)
@@ -270,7 +271,9 @@ export default function DraftRoomPage() {
                   </div>
                   <div className="text-xs text-gray-600 dark:text-gray-300">
                     Rank {p.skill_rank}
-                    {p.is_returning ? " • Returning" : " • Free Agent"}
+                    {p.is_returning
+                      ? ` • Returning to ${p.returning_team_name ?? "Team"}`
+                      : " • Free Agent"}
                   </div>
                 </div>
                 <button
