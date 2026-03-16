@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 type Draft = {
   id: string;
   name: string;
-  status: string;
+  status: "scheduled" | "active" | "closed";
   grade: number;
   program: "flag" | "tackle";
   current_pick_index: number;
@@ -19,6 +19,7 @@ type SlotRow = {
   pick_index: number;
   round: number;
   slot_type: "standard" | "bonus";
+  team_id: string;
   team_name: string;
 };
 
@@ -50,8 +51,13 @@ export default function DraftRoomPage() {
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [search, setSearch] = useState("");
   const [showReturning, setShowReturning] = useState(false);
+
   const [busyPlayerId, setBusyPlayerId] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [rankChoice, setRankChoice] = useState<number>(1);
+
   const [error, setError] = useState<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
 
@@ -80,9 +86,10 @@ export default function DraftRoomPage() {
     if (dErr) return setError(dErr.message);
     setDraft(d as Draft);
 
+    // Note: we fetch both team name and team id for reliable returning checks
     const { data: s, error: sErr } = await supabase
       .from("pick_slots")
-      .select("pick_index,round,slot_type, teams(name)")
+      .select("pick_index,round,slot_type, team_id, teams(name)")
       .eq("draft_id", validDraftId)
       .order("pick_index", { ascending: true });
 
@@ -93,6 +100,7 @@ export default function DraftRoomPage() {
         pick_index: r.pick_index,
         round: r.round,
         slot_type: r.slot_type,
+        team_id: r.team_id,
         team_name: r.teams.name,
       }))
     );
@@ -128,10 +136,12 @@ export default function DraftRoomPage() {
       .eq("grade", draft.grade)
       .eq("program", draft.program);
 
+    // Toggle: show only free agents unless showReturning is enabled
     if (!showReturning) {
       query = query.eq("is_returning", false);
     }
 
+    // Ordering: free agents first
     query = query
       .order("is_returning", { ascending: true })
       .order("skill_rank", { ascending: true })
@@ -148,6 +158,27 @@ export default function DraftRoomPage() {
     const { data, error } = await query;
     if (error) setPlayerError(error.message);
     else setPlayers((data ?? []) as PlayerRow[]);
+  }
+
+  function getDraftDisabledReason(p: PlayerRow): string | null {
+    if (!draft) return "Draft not loaded";
+    if (draft.status !== "active") return "Draft is not active";
+    if (!currentSlot) return "Current slot not loaded";
+
+    // Bonus slots can only draft free agents
+    if (currentSlot.slot_type === "bonus" && p.is_returning) {
+      return "Bonus pick must be a free agent";
+    }
+
+    // Returning players can only be drafted by their own team (on their turn)
+    if (p.is_returning) {
+      if (!p.returning_team_id) return "Returning team not set";
+      if (p.returning_team_id !== currentSlot.team_id) {
+        return `Returning to ${p.returning_team_name ?? "another team"} — not eligible this pick`;
+      }
+    }
+
+    return null;
   }
 
   async function draftPlayer(playerId: string) {
@@ -195,6 +226,48 @@ export default function DraftRoomPage() {
     await loadAvailablePlayers(draftId, search);
   }
 
+  async function setDraftStatus(status: "scheduled" | "active" | "closed") {
+    if (!draftId) return;
+    setPlayerError(null);
+    setAdminBusy(true);
+
+    const { error } = await supabase.rpc("set_draft_status", {
+      p_draft_id: draftId,
+      p_status: status,
+    });
+
+    setAdminBusy(false);
+
+    if (error) {
+      setPlayerError(error.message);
+      return;
+    }
+
+    await loadDraftAndBoard(draftId);
+    await loadAvailablePlayers(draftId, search);
+  }
+
+  async function applyOpenRank() {
+    if (!draftId) return;
+    setPlayerError(null);
+    setAdminBusy(true);
+
+    const { error } = await supabase.rpc("set_open_skill_rank", {
+      p_draft_id: draftId,
+      p_rank: rankChoice,
+    });
+
+    setAdminBusy(false);
+
+    if (error) {
+      setPlayerError(error.message);
+      return;
+    }
+
+    await loadDraftAndBoard(draftId);
+    await loadAvailablePlayers(draftId, search);
+  }
+
   useEffect(() => {
     if (!draftId) return;
 
@@ -225,6 +298,7 @@ export default function DraftRoomPage() {
 
   useEffect(() => {
     if (!draftId || !draft) return;
+    setRankChoice(draft.current_skill_rank); // keep dropdown in sync
     loadAvailablePlayers(draftId, search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId, draft?.grade, draft?.program]);
@@ -246,10 +320,12 @@ export default function DraftRoomPage() {
         {draft && currentSlot && (
           <p className="text-sm text-gray-600 dark:text-gray-300">
             On the clock: <b>{currentSlot.team_name}</b> • Slot: <b>{currentSlot.slot_type}</b> • Pick{" "}
-            <b>{draft.current_pick_index}</b> • Open Skill Rank: <b>{draft.current_skill_rank}</b>
+            <b>{draft.current_pick_index}</b> • Open Skill Rank: <b>{draft.current_skill_rank}</b> • Status:{" "}
+            <b>{draft.status}</b>
           </p>
         )}
 
+        {/* Admin controls (testing now; later gate to admin only) */}
         <div className="flex flex-wrap items-center gap-2 mt-3">
           <button
             className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
@@ -259,6 +335,54 @@ export default function DraftRoomPage() {
           >
             {resetBusy ? "Resetting…" : "Reset Draft (testing)"}
           </button>
+
+          <div className="h-6 w-px bg-gray-300 dark:bg-gray-700 mx-1" />
+
+          <button
+            className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
+            onClick={() => setDraftStatus("active")}
+            disabled={adminBusy}
+          >
+            Start Draft
+          </button>
+
+          <button
+            className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
+            onClick={() => setDraftStatus("closed")}
+            disabled={adminBusy}
+          >
+            Close Draft
+          </button>
+
+          <div className="h-6 w-px bg-gray-300 dark:bg-gray-700 mx-1" />
+
+          <label className="text-sm text-gray-700 dark:text-gray-200 flex items-center gap-2">
+            Open Rank
+            <select
+              className="border rounded px-2 py-2 bg-white dark:bg-black/20 text-gray-900 dark:text-gray-100"
+              value={rankChoice}
+              onChange={(e) => setRankChoice(parseInt(e.target.value, 10))}
+              disabled={adminBusy}
+            >
+              {[1, 2, 3, 4, 5].map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
+            onClick={applyOpenRank}
+            disabled={adminBusy}
+          >
+            Set Rank
+          </button>
+
+          {adminBusy && (
+            <span className="text-sm text-gray-600 dark:text-gray-300">Working…</span>
+          )}
         </div>
 
         {error && <p className="text-red-600 mt-2">{error}</p>}
@@ -266,6 +390,7 @@ export default function DraftRoomPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
+        {/* Draft Board */}
         <div className="lg:col-span-2 border rounded">
           <div className="grid grid-cols-5 gap-2 p-3 text-sm font-medium border-b text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
             <div>Pick</div>
@@ -298,6 +423,7 @@ export default function DraftRoomPage() {
           </div>
         </div>
 
+        {/* Available Players */}
         <div className="border rounded p-3 space-y-3">
           <div className="space-y-2">
             <div className="font-medium text-gray-900 dark:text-gray-100">Available Players</div>
@@ -325,29 +451,41 @@ export default function DraftRoomPage() {
           </div>
 
           <div className="max-h-[60vh] overflow-auto divide-y border rounded">
-            {players.map((p) => (
-              <div key={p.id} className="p-2 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="font-medium truncate text-gray-900 dark:text-gray-100">
-                    {p.first_name} {p.last_name}
-                  </div>
-                  <div className="text-xs text-gray-600 dark:text-gray-300">
-                    Rank {p.skill_rank}
-                    {p.is_returning
-                      ? ` • Returning to ${p.returning_team_name ?? "Team"}`
-                      : " • Free Agent"}
-                  </div>
-                </div>
+            {players.map((p) => {
+              const disabledReason = getDraftDisabledReason(p);
+              const isDisabled = !!disabledReason;
+              const isBusy = busyPlayerId === p.id;
 
-                <button
-                  className="shrink-0 bg-black text-white rounded px-3 py-2 disabled:opacity-50"
-                  onClick={() => draftPlayer(p.id)}
-                  disabled={busyPlayerId === p.id}
-                >
-                  {busyPlayerId === p.id ? "Drafting…" : "Draft"}
-                </button>
-              </div>
-            ))}
+              return (
+                <div key={p.id} className="p-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-medium truncate text-gray-900 dark:text-gray-100">
+                      {p.first_name} {p.last_name}
+                    </div>
+                    <div className="text-xs text-gray-600 dark:text-gray-300">
+                      Rank {p.skill_rank}
+                      {p.is_returning
+                        ? ` • Returning to ${p.returning_team_name ?? "Team"}`
+                        : " • Free Agent"}
+                    </div>
+                    {isDisabled && (
+                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                        {disabledReason}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    className="shrink-0 bg-black text-white rounded px-3 py-2 disabled:opacity-50"
+                    onClick={() => draftPlayer(p.id)}
+                    disabled={isBusy || isDisabled}
+                    title={disabledReason ?? "Draft this player"}
+                  >
+                    {isBusy ? "Drafting…" : "Draft"}
+                  </button>
+                </div>
+              );
+            })}
 
             {players.length === 0 && (
               <div className="p-3 text-sm text-gray-600 dark:text-gray-300">
