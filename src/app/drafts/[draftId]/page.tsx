@@ -86,7 +86,6 @@ export default function DraftRoomPage() {
     if (dErr) return setError(dErr.message);
     setDraft(d as Draft);
 
-    // Note: we fetch both team name and team id for reliable returning checks
     const { data: s, error: sErr } = await supabase
       .from("pick_slots")
       .select("pick_index,round,slot_type, team_id, teams(name)")
@@ -136,12 +135,10 @@ export default function DraftRoomPage() {
       .eq("grade", draft.grade)
       .eq("program", draft.program);
 
-    // Toggle: show only free agents unless showReturning is enabled
     if (!showReturning) {
       query = query.eq("is_returning", false);
     }
 
-    // Ordering: free agents first
     query = query
       .order("is_returning", { ascending: true })
       .order("skill_rank", { ascending: true })
@@ -174,7 +171,9 @@ export default function DraftRoomPage() {
     if (p.is_returning) {
       if (!p.returning_team_id) return "Returning team not set";
       if (p.returning_team_id !== currentSlot.team_id) {
-        return `Returning to ${p.returning_team_name ?? "another team"} — not eligible this pick`;
+        return `Returning to ${
+          p.returning_team_name ?? "(unassigned)"
+        } — not eligible this pick`;
       }
     }
 
@@ -224,6 +223,30 @@ export default function DraftRoomPage() {
 
     await loadDraftAndBoard(draftId);
     await loadAvailablePlayers(draftId, search);
+  }
+
+  async function cleanupOrphans() {
+    const ok = window.confirm(
+      "Run orphan cleanup? This will delete invalid rows across drafts/teams/players/picks."
+    );
+    if (!ok) return;
+
+    setPlayerError(null);
+    setAdminBusy(true);
+
+    const { error } = await supabase.rpc("cleanup_orphans");
+
+    setAdminBusy(false);
+
+    if (error) {
+      setPlayerError(error.message);
+      return;
+    }
+
+    if (draftId) {
+      await loadDraftAndBoard(draftId);
+      await loadAvailablePlayers(draftId, search);
+    }
   }
 
   async function setDraftStatus(status: "scheduled" | "active" | "closed") {
@@ -298,7 +321,7 @@ export default function DraftRoomPage() {
 
   useEffect(() => {
     if (!draftId || !draft) return;
-    setRankChoice(draft.current_skill_rank); // keep dropdown in sync
+    setRankChoice(draft.current_skill_rank);
     loadAvailablePlayers(draftId, search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId, draft?.grade, draft?.program]);
@@ -325,7 +348,6 @@ export default function DraftRoomPage() {
           </p>
         )}
 
-        {/* Admin controls (testing now; later gate to admin only) */}
         <div className="flex flex-wrap items-center gap-2 mt-3">
           <button
             className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
@@ -334,6 +356,15 @@ export default function DraftRoomPage() {
             title="Testing only"
           >
             {resetBusy ? "Resetting…" : "Reset Draft (testing)"}
+          </button>
+
+          <button
+            className="border rounded px-3 py-2 text-sm text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-white/10 disabled:opacity-50"
+            onClick={cleanupOrphans}
+            disabled={adminBusy}
+            title="Testing only"
+          >
+            Cleanup Orphans
           </button>
 
           <div className="h-6 w-px bg-gray-300 dark:bg-gray-700 mx-1" />
@@ -390,7 +421,6 @@ export default function DraftRoomPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Draft Board */}
         <div className="lg:col-span-2 border rounded">
           <div className="grid grid-cols-5 gap-2 p-3 text-sm font-medium border-b text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900/40">
             <div>Pick</div>
@@ -423,7 +453,6 @@ export default function DraftRoomPage() {
           </div>
         </div>
 
-        {/* Available Players */}
         <div className="border rounded p-3 space-y-3">
           <div className="space-y-2">
             <div className="font-medium text-gray-900 dark:text-gray-100">Available Players</div>
@@ -462,10 +491,10 @@ export default function DraftRoomPage() {
                     <div className="font-medium truncate text-gray-900 dark:text-gray-100">
                       {p.first_name} {p.last_name}
                     </div>
-                    <div className="text-xs text-gray-600 dark:text-gray-300">
+                    <div className="text-xs text-gray-600 dark:text.gray-300">
                       Rank {p.skill_rank}
                       {p.is_returning
-                        ? ` • Returning to ${p.returning_team_name ?? "Team"}`
+                        ? ` • Returning to ${p.returning_team_name ?? "(unassigned)"}`
                         : " • Free Agent"}
                     </div>
                     {isDisabled && (
